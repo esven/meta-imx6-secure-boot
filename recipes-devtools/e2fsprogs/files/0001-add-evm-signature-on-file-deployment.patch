@@ -1,0 +1,391 @@
+From 1f1ea62283f98f0a29cbafafe2fe1cdc0e60d5f8 Mon Sep 17 00:00:00 2001
+From: Sven Ebenfeld <sven.ebenfeld@gmail.com>
+Date: Thu, 22 Dec 2016 19:36:32 +0100
+Subject: [PATCH] add evm signature on file deployment
+
+Signed-off-by: Sven Ebenfeld <sven.ebenfeld@gmail.com>
+---
+ configure.ac        |   6 ++
+ debugfs/Makefile.in |   4 +-
+ misc/Makefile.in    |   6 +-
+ misc/create_inode.c | 265 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 276 insertions(+), 5 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index ceceeb6..b5c883d 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -910,6 +910,12 @@ AC_CHECK_HEADERS(net/if.h,,,
+ #include <sys/socket.h>
+ #endif
+ ]])
++PKG_CHECK_MODULES(OPENSSL, [ openssl >= 0.9.8 ])
++AC_SUBST(OPENSSL_CFLAGS)
++AC_SUBST(OPENSSL_LIBS)
++AC_CHECK_HEADER(unistd.h)
++AC_CHECK_HEADERS(openssl/conf.h)
++
+ AC_FUNC_VPRINTF
+ dnl Check to see if dirent has member d_reclen. On cygwin those d_reclen
+ dnl is not decleared.
+diff --git a/debugfs/Makefile.in b/debugfs/Makefile.in
+index c22b8c0..7cf538b 100644
+--- a/debugfs/Makefile.in
++++ b/debugfs/Makefile.in
+@@ -61,7 +61,7 @@ all:: $(PROGS) $(MANPAGES)
+ 
+ debugfs: $(DEBUG_OBJS) $(DEPLIBS)
+ 	$(E) "	LD $@"
+-	$(Q) $(CC) $(ALL_LDFLAGS) -o debugfs $(DEBUG_OBJS) $(LIBS)
++	$(Q) $(CC) $(ALL_LDFLAGS) -o debugfs $(DEBUG_OBJS) $(LIBS) @OPENSSL_LIBS@
+ 
+ debugfs.static: $(DEBUG_OBJS) $(STATIC_DEPLIBS)
+ 	$(E) "	LD $@"
+@@ -104,7 +104,7 @@ revoke.o: $(srcdir)/../e2fsck/revoke.c
+ 
+ create_inode.o: $(srcdir)/../misc/create_inode.c
+ 	$(E) "	CC $@"
+-	$(Q) $(CC) -c $(ALL_CFLAGS) -I$(srcdir) \
++	$(Q) $(CC) -c $(ALL_CFLAGS) $(OPENSSL_CFLAGS) -I$(srcdir) \
+ 		 $(srcdir)/../misc/create_inode.c -o $@
+ 
+ debugfs.8: $(DEP_SUBSTITUTE) $(srcdir)/debugfs.8.in
+diff --git a/misc/Makefile.in b/misc/Makefile.in
+index 57c81a2..820cf47 100644
+--- a/misc/Makefile.in
++++ b/misc/Makefile.in
+@@ -265,12 +265,12 @@ mke2fs: $(MKE2FS_OBJS) $(DEPLIBS) $(LIBE2P) $(DEPLIBBLKID) $(DEPLIBUUID) \
+ 	$(E) "	LD $@"
+ 	$(Q) $(CC) $(ALL_LDFLAGS) -o mke2fs $(MKE2FS_OBJS) $(LIBS) $(LIBBLKID) \
+ 		$(LIBUUID) $(LIBEXT2FS) $(LIBE2P) $(LIBINTL) \
+-		$(SYSLIBS) $(LIBMAGIC)
++		$(SYSLIBS) $(LIBMAGIC) @OPENSSL_LIBS@
+ 
+ mke2fs.static: $(MKE2FS_OBJS) $(STATIC_DEPLIBS) $(STATIC_LIBE2P) $(DEPSTATIC_LIBUUID) \
+ 		$(DEPSTATIC_LIBBLKID)
+ 	$(E) "	LD $@"
+-	$(Q) $(CC) $(ALL_LDFLAGS) -static -o mke2fs.static $(MKE2FS_OBJS) \
++	$(Q) $(CC) $(ALL_LDFLAGS) $(OPENSSL_LIBS) -static -o mke2fs.static $(MKE2FS_OBJS) \
+ 		$(STATIC_LIBS) $(STATIC_LIBE2P) \
+ 		$(STATIC_LIBBLKID) $(STATIC_LIBUUID) $(LIBINTL) $(SYSLIBS) \
+ 		$(LIBMAGIC)
+@@ -278,7 +278,7 @@ mke2fs.static: $(MKE2FS_OBJS) $(STATIC_DEPLIBS) $(STATIC_LIBE2P) $(DEPSTATIC_LIB
+ mke2fs.profiled: $(MKE2FS_OBJS) $(PROFILED_DEPLIBS) \
+ 	$(PROFILED_LIBE2P) $(PROFILED_DEPLIBBLKID) $(PROFILED_DEPLIBUUID)
+ 	$(E) "	LD $@"
+-	$(Q) $(CC) $(ALL_LDFLAGS) -g -pg -o mke2fs.profiled \
++	$(Q) $(CC) $(ALL_LDFLAGS) $(OPENSSL_LIBS) -g -pg -o mke2fs.profiled \
+ 		$(PROFILED_MKE2FS_OBJS) $(PROFILED_LIBBLKID) \
+ 		$(PROFILED_LIBUUID) $(PROFILED_LIBE2P) \
+ 		$(LIBINTL) $(PROFILED_LIBS) $(SYSLIBS) $(LIBMAGIC)
+diff --git a/misc/create_inode.c b/misc/create_inode.c
+index c879a3e..37d5ca6 100644
+--- a/misc/create_inode.c
++++ b/misc/create_inode.c
+@@ -21,17 +21,28 @@
+ #ifdef HAVE_ATTR_XATTR_H
+ #include <attr/xattr.h>
+ #endif
++#include <linux/xattr.h>
+ #include <sys/ioctl.h>
+ #include <ext2fs/ext2fs.h>
+ #include <ext2fs/ext2_types.h>
+ #include <ext2fs/fiemap.h>
+ 
++#include <openssl/sha.h>
++#include <openssl/pem.h>
++#include <openssl/hmac.h>
++#include <openssl/err.h>
++#include <openssl/rsa.h>
++
++#include <asm/byteorder.h>
++
+ #include "create_inode.h"
+ #include "support/nls-enable.h"
+ 
+ /* 64KiB is the minimium blksize to best minimize system call overhead. */
+ #define COPY_FILE_BUFLEN	65536
+ 
++static errcode_t set_inode_evm_hash(ext2_filsys fs, ext2_ino_t ino, const char *filename, struct ext2_xattr_handle *handle);
++
+ static int ext2_file_type(unsigned int mode)
+ {
+ 	if (LINUX_S_ISREG(mode))
+@@ -204,6 +215,14 @@ static errcode_t set_inode_xattr(ext2_filsys fs, ext2_ino_t ino,
+ 		}
+ 
+ 	}
++
++	retval = set_inode_evm_hash(fs, ino, filename, handle);
++	if (retval) {
++		com_err(__func__, retval,
++				_("while setting EVM Hash for \"%s\""), filename);
++		goto out;
++	}
++
+  out:
+ 	ext2fs_free_mem(&list);
+ 	close_retval = ext2fs_xattrs_close(&handle);
+@@ -219,6 +238,7 @@ static errcode_t set_inode_xattr(ext2_filsys fs EXT2FS_ATTR((unused)),
+ 				 ext2_ino_t ino EXT2FS_ATTR((unused)),
+ 				 const char *filename EXT2FS_ATTR((unused)))
+ {
++	printf("oops\n");
+ 	return 0;
+ }
+ #endif  /* HAVE_LLISTXATTR */
+@@ -678,6 +698,251 @@ out:
+ 	return retval;
+ }
+ 
++static char *evm_default_xattrs[] = {
++	XATTR_NAME_SELINUX,
++	XATTR_NAME_SMACK,
++	XATTR_NAME_IMA,
++	XATTR_NAME_CAPS,
++	NULL
++};
++
++struct h_misc_64 {
++	__u64 ino;
++	__u32 generation;
++	uid_t uid;
++	gid_t gid;
++	unsigned short mode;
++};
++
++struct h_misc_32 {
++	__u32 ino;
++	__u32 generation;
++	uid_t uid;
++	gid_t gid;
++	unsigned short mode;
++};
++
++enum digsig_version {
++	DIGSIG_VERSION_1 = 1,
++	DIGSIG_VERSION_2
++};
++
++enum pkey_hash_algo {
++	PKEY_HASH_MD4,
++	PKEY_HASH_MD5,
++	PKEY_HASH_SHA1,
++	PKEY_HASH_RIPE_MD_160,
++	PKEY_HASH_SHA256,
++	PKEY_HASH_SHA384,
++	PKEY_HASH_SHA512,
++	PKEY_HASH_SHA224,
++	PKEY_HASH__LAST
++};
++
++const char *const pkey_hash_algo[PKEY_HASH__LAST] = {
++	[PKEY_HASH_MD4]		= "md4",
++	[PKEY_HASH_MD5]		= "md5",
++	[PKEY_HASH_SHA1]	= "sha1",
++	[PKEY_HASH_RIPE_MD_160]	= "rmd160",
++	[PKEY_HASH_SHA256]	= "sha256",
++	[PKEY_HASH_SHA384]	= "sha384",
++	[PKEY_HASH_SHA512]	= "sha512",
++	[PKEY_HASH_SHA224]	= "sha224",
++};
++
++struct RSA_ASN1_template {
++	const __u8 *data;
++	size_t size;
++};
++/*
++ * Hash algorithm OIDs plus ASN.1 DER wrappings [RFC4880 sec 5.2.2].
++ */
++static const __u8 RSA_digest_info_SHA1[] = {
++	0x30, 0x21, 0x30, 0x09, 0x06, 0x05,
++	0x2B, 0x0E, 0x03, 0x02, 0x1A,
++	0x05, 0x00, 0x04, 0x14
++};
++
++
++/*
++ * signature format v2 - for using with asymmetric keys
++ */
++struct signature_v2_hdr {
++	__u8 version;	/* signature format version */
++	__u8	hash_algo;	/* Digest algorithm [enum pkey_hash_algo] */
++	__u32 keyid;		/* IMA key identifier - not X509/PGP specific*/
++	__u16 sig_size;	/* signature size */
++	__u8 sig[0];		/* signature payload */
++} __attribute__((packed));
++
++enum evm_ima_xattr_type {
++	IMA_XATTR_DIGEST = 0x01,
++	EVM_XATTR_HMAC,
++	EVM_IMA_XATTR_DIGSIG,
++	IMA_XATTR_DIGEST_NG,
++};
++
++/* Add EVM Signature to Inode */
++static errcode_t set_inode_evm_hash(ext2_filsys fs, ext2_ino_t ino, const char *filename, struct ext2_xattr_handle *handle)
++{
++	int err;
++	__u32 generation = 0;
++	EVP_MD_CTX ctx;
++	unsigned int mdlen;
++	char **xattrname;
++	void *xattr_value;
++	unsigned char hash[20];
++	unsigned char sig[1024];
++
++	struct h_misc_64 hmac_misc;
++	int hmac_size;
++	ssize_t value_size;
++	char *list = NULL;
++	errcode_t retval = 0;
++
++	err = EVP_DigestInit(&ctx, EVP_sha1());
++	if (!err) {
++		com_err(__func__, err, "EVP_DigestInit() failed");
++		return 1;
++	}
++
++	for (xattrname = evm_default_xattrs; *xattrname != NULL; xattrname++) {
++		err = ext2fs_xattr_get(handle, *xattrname, (void **) &xattr_value,
++						&value_size);
++		if (err)
++			continue;
++
++		err = EVP_DigestUpdate(&ctx, xattr_value, value_size);
++		if (!err) {
++			com_err(__func__, err, "EVP_DigestUpdate() failed");
++			return err;
++		}
++	}
++
++	memset(&hmac_misc, 0, sizeof(hmac_misc));
++
++	struct h_misc_32 *hmac = (struct h_misc_32 *)&hmac_misc;
++
++	struct ext2_inode	inode;
++
++	retval = ext2fs_read_inode(fs, ino, &inode);
++	if (retval) {
++		com_err(__func__, retval, _("while reading inode %u"), ino);
++		return retval;
++	}
++	hmac_size = sizeof(*hmac);
++	hmac->ino = ino;
++	hmac->generation = inode.i_generation;
++	hmac->uid = inode.i_uid;
++	hmac->gid = inode.i_gid;
++	hmac->mode = inode.i_mode;
++
++	err = EVP_DigestUpdate(&ctx, &hmac_misc, hmac_size);
++	if (!err) {
++		com_err(__func__, err, "EVP_DigestUpdate() failed");
++		return 1;
++	}
++
++	err = EVP_DigestUpdate(&ctx, fs->super->s_uuid, sizeof(fs->super->s_uuid));
++	if (!err) {
++		com_err(__func__, err, "EVP_DigestUpdate() failed");
++		return 1;
++	}
++
++	err = EVP_DigestFinal(&ctx, hash, &mdlen);
++	if (!err) {
++		com_err(__func__, err, "EVP_DigestFinal() failed\n");
++		return 1;
++	}
++
++	/** Hash Calculated begin Signing **/
++
++	struct signature_v2_hdr *hdr;
++	int len = -1;
++	RSA *key;
++	char name[20];
++	unsigned char *buf;
++	const struct RSA_ASN1_template asn1 = { RSA_digest_info_SHA1, sizeof(RSA_digest_info_SHA1) };
++
++	FILE *fp;
++
++	fp = fopen("/home/esven/openembedded/krogoth/poky/meta-intel-iot-security/meta-integrity/scripts/keys/privkey_ima.pem", "r");
++	if (!fp) {
++		com_err(__func__, 0, "Failed to open keyfile: %s\n", "/home/esven/openembedded/krogoth/poky/meta-intel-iot-security/meta-integrity/scripts/keys/privkey_ima.pem");
++		return -1;
++	}
++	ERR_load_crypto_strings();
++	key = PEM_read_RSAPrivateKey(fp, NULL, NULL, NULL);
++	if (!key) {
++		char str[256];
++
++		ERR_error_string(ERR_get_error(), str);
++		com_err(__func__, 0, "PEM_read_RSAPrivateKey() failed: %s\n", str);
++		fclose(fp);
++		return -1;
++	}
++
++	fclose(fp);
++
++
++	hdr = (struct signature_v2_hdr *) (sig + 1);
++
++	hdr->version = (__u8) DIGSIG_VERSION_2;
++
++	hdr->hash_algo = PKEY_HASH_SHA1;
++
++	__u8 sha1[SHA_DIGEST_LENGTH];
++	unsigned char *pkey = NULL;
++
++	len = i2d_RSAPublicKey(key, &pkey);
++
++	SHA1(pkey, len, sha1);
++
++	/* sha1[12 - 19] is exactly keyid from gpg file */
++	memcpy(&hdr->keyid, sha1 + 16, 4);
++
++	free(pkey);
++
++	buf = malloc(mdlen + asn1.size);
++	if (!buf)
++		goto out;
++
++	memcpy(buf, asn1.data, asn1.size);
++	memcpy(buf + asn1.size, hash, mdlen);
++	len = RSA_private_encrypt(mdlen + asn1.size, buf, hdr->sig, key,
++			RSA_PKCS1_PADDING);
++	if (len < 0) {
++		err = len;
++		com_err(__func__, err, "RSA_private_encrypt() failed: %d\n", len);
++		goto out;
++	}
++
++	/* we add bit length of the signature to make it gnupg compatible */
++	hdr->sig_size = __cpu_to_be16(len);
++
++	len += sizeof(*hdr);
++	len++;
++	sig[0] = EVM_IMA_XATTR_DIGSIG;
++
++	void *sigPtr;
++	err = ext2fs_get_mem(len, &sigPtr);
++	if (err) {
++		com_err(__func__, err, _("while allocating memory"));
++		goto out;
++	}
++	memcpy(sigPtr, sig, len);
++	err = ext2fs_xattr_set(handle, "security.evm", sigPtr, len);
++	if (err) {
++		com_err(__func__, err, _("while setting xattr: \"security.evm\""));
++		goto out;
++	}
++
++out:	if (buf)
++		free(buf);
++	RSA_free(key);
++	return err;
++}
++
+ /* Copy files from source_dir to fs */
+ static errcode_t __populate_fs(ext2_filsys fs, ext2_ino_t parent_ino,
+ 			       const char *source_dir, ext2_ino_t root,
+-- 
+2.7.4
+
