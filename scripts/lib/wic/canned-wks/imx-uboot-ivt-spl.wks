@@ -14,4 +14,4 @@
 #
 part SPL --source rawcopy --sourceparams="file=SPL" --ondisk mmcblk --no-table --align 1
 part u-boot --source rawcopy --sourceparams="file=u-boot-ivt.img" --ondisk mmcblk --no-table --align 69
-part / --source rootfs --ondisk mmcblk --fstype=ext4 --label root --align 4096
+part / --source signed-rootfs --ondisk mmcblk --fstype=ext4 --label root --align 4096

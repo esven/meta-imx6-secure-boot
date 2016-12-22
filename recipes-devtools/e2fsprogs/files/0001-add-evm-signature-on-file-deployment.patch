@@ -1,47 +1,64 @@
-From 1f1ea62283f98f0a29cbafafe2fe1cdc0e60d5f8 Mon Sep 17 00:00:00 2001
+From 97302cb49d31665a287bd33f67d00c4dc2a3d5e7 Mon Sep 17 00:00:00 2001
 From: Sven Ebenfeld <sven.ebenfeld@gmail.com>
 Date: Thu, 22 Dec 2016 19:36:32 +0100
 Subject: [PATCH] add evm signature on file deployment
 
 Signed-off-by: Sven Ebenfeld <sven.ebenfeld@gmail.com>
 ---
- configure.ac        |   6 ++
- debugfs/Makefile.in |   4 +-
+ configure.ac        |  11 ++
+ debugfs/Makefile.in |   7 +-
  misc/Makefile.in    |   6 +-
- misc/create_inode.c | 265 ++++++++++++++++++++++++++++++++++++++++++++++++++++
- 4 files changed, 276 insertions(+), 5 deletions(-)
+ misc/create_inode.c | 287 ++++++++++++++++++++++++++++++++++++++++++++++++++--
+ misc/create_inode.h |   2 +-
+ misc/mke2fs.c       |  15 ++-
+ 6 files changed, 314 insertions(+), 14 deletions(-)
 
 diff --git a/configure.ac b/configure.ac
-index ceceeb6..b5c883d 100644
+index ceceeb6..f790215 100644
 --- a/configure.ac
 +++ b/configure.ac
-@@ -910,6 +910,12 @@ AC_CHECK_HEADERS(net/if.h,,,
+@@ -910,6 +910,17 @@ AC_CHECK_HEADERS(net/if.h,,,
  #include <sys/socket.h>
  #endif
  ]])
-+PKG_CHECK_MODULES(OPENSSL, [ openssl >= 0.9.8 ])
-+AC_SUBST(OPENSSL_CFLAGS)
-+AC_SUBST(OPENSSL_LIBS)
-+AC_CHECK_HEADER(unistd.h)
-+AC_CHECK_HEADERS(openssl/conf.h)
++
++AC_ARG_WITH([openssl], AS_HELP_STRING([--with-openssl], [Build with OpenSSL support for EVM Signature Creation]), [], [with_openssl=no])
++if test "x$with_openssl" = "xyes"; then
++	PKG_CHECK_MODULES(OPENSSL, [ openssl >= 0.9.8 ])
++	AC_SUBST(OPENSSL_CFLAGS)
++	AC_SUBST(OPENSSL_LIBS)
++	AC_CHECK_HEADER(unistd.h)
++	AC_CHECK_HEADERS(openssl/conf.h)
++	AC_DEFINE([HAVE_OPENSSL], [1], [Use OpenSSL])
++fi
 +
  AC_FUNC_VPRINTF
  dnl Check to see if dirent has member d_reclen. On cygwin those d_reclen
  dnl is not decleared.
 diff --git a/debugfs/Makefile.in b/debugfs/Makefile.in
-index c22b8c0..7cf538b 100644
+index c22b8c0..c8122a2 100644
 --- a/debugfs/Makefile.in
 +++ b/debugfs/Makefile.in
-@@ -61,7 +61,7 @@ all:: $(PROGS) $(MANPAGES)
+@@ -51,6 +51,9 @@ STATIC_DEPLIBS= $(STATIC_LIBEXT2FS) $(DEPSTATIC_LIBSS) \
+ LOCAL_CFLAGS = -I$(srcdir)/../e2fsck -DDEBUGFS
+ DEPEND_CFLAGS = -I$(srcdir)
+ 
++OPENSSL_CFLAGS = @OPENSSL_CFLAGS@
++OPENSSL_LIBS = @OPENSSL_LIBS@
++
+ .c.o:
+ 	$(E) "	CC $<"
+ 	$(Q) $(CC) -c $(ALL_CFLAGS) $< -o $@
+@@ -61,7 +64,7 @@ all:: $(PROGS) $(MANPAGES)
  
  debugfs: $(DEBUG_OBJS) $(DEPLIBS)
  	$(E) "	LD $@"
 -	$(Q) $(CC) $(ALL_LDFLAGS) -o debugfs $(DEBUG_OBJS) $(LIBS)
-+	$(Q) $(CC) $(ALL_LDFLAGS) -o debugfs $(DEBUG_OBJS) $(LIBS) @OPENSSL_LIBS@
++	$(Q) $(CC) $(ALL_LDFLAGS) -o debugfs $(DEBUG_OBJS) $(LIBS) $(OPENSSL_LIBS)
  
  debugfs.static: $(DEBUG_OBJS) $(STATIC_DEPLIBS)
  	$(E) "	LD $@"
-@@ -104,7 +104,7 @@ revoke.o: $(srcdir)/../e2fsck/revoke.c
+@@ -104,7 +107,7 @@ revoke.o: $(srcdir)/../e2fsck/revoke.c
  
  create_inode.o: $(srcdir)/../misc/create_inode.c
  	$(E) "	CC $@"
@@ -51,52 +68,37 @@ index c22b8c0..7cf538b 100644
  
  debugfs.8: $(DEP_SUBSTITUTE) $(srcdir)/debugfs.8.in
 diff --git a/misc/Makefile.in b/misc/Makefile.in
-index 57c81a2..820cf47 100644
+index 57c81a2..de2d446 100644
 --- a/misc/Makefile.in
 +++ b/misc/Makefile.in
-@@ -265,12 +265,12 @@ mke2fs: $(MKE2FS_OBJS) $(DEPLIBS) $(LIBE2P) $(DEPLIBBLKID) $(DEPLIBUUID) \
+@@ -116,6 +116,10 @@ DEPLIBS_E2P= $(LIBE2P) $(DEPLIBCOM_ERR)
+ 
+ COMPILE_ET=$(top_builddir)/lib/et/compile_et --build-tree
+ 
++OPENSSL_CFLAGS = @OPENSSL_CFLAGS@
++OPENSSL_LIBS = @OPENSSL_LIBS@
++
++
+ # This nastyness is needed because of jfs_user.h hackery; when we finally
+ # clean up this mess, we should be able to drop it
+ JOURNAL_CFLAGS = -I$(srcdir)/../e2fsck $(ALL_CFLAGS) -DDEBUGFS
+@@ -265,7 +269,7 @@ mke2fs: $(MKE2FS_OBJS) $(DEPLIBS) $(LIBE2P) $(DEPLIBBLKID) $(DEPLIBUUID) \
  	$(E) "	LD $@"
  	$(Q) $(CC) $(ALL_LDFLAGS) -o mke2fs $(MKE2FS_OBJS) $(LIBS) $(LIBBLKID) \
  		$(LIBUUID) $(LIBEXT2FS) $(LIBE2P) $(LIBINTL) \
 -		$(SYSLIBS) $(LIBMAGIC)
-+		$(SYSLIBS) $(LIBMAGIC) @OPENSSL_LIBS@
++		$(SYSLIBS) $(LIBMAGIC) $(OPENSSL_LIBS)
  
  mke2fs.static: $(MKE2FS_OBJS) $(STATIC_DEPLIBS) $(STATIC_LIBE2P) $(DEPSTATIC_LIBUUID) \
  		$(DEPSTATIC_LIBBLKID)
- 	$(E) "	LD $@"
--	$(Q) $(CC) $(ALL_LDFLAGS) -static -o mke2fs.static $(MKE2FS_OBJS) \
-+	$(Q) $(CC) $(ALL_LDFLAGS) $(OPENSSL_LIBS) -static -o mke2fs.static $(MKE2FS_OBJS) \
- 		$(STATIC_LIBS) $(STATIC_LIBE2P) \
- 		$(STATIC_LIBBLKID) $(STATIC_LIBUUID) $(LIBINTL) $(SYSLIBS) \
- 		$(LIBMAGIC)
-@@ -278,7 +278,7 @@ mke2fs.static: $(MKE2FS_OBJS) $(STATIC_DEPLIBS) $(STATIC_LIBE2P) $(DEPSTATIC_LIB
- mke2fs.profiled: $(MKE2FS_OBJS) $(PROFILED_DEPLIBS) \
- 	$(PROFILED_LIBE2P) $(PROFILED_DEPLIBBLKID) $(PROFILED_DEPLIBUUID)
- 	$(E) "	LD $@"
--	$(Q) $(CC) $(ALL_LDFLAGS) -g -pg -o mke2fs.profiled \
-+	$(Q) $(CC) $(ALL_LDFLAGS) $(OPENSSL_LIBS) -g -pg -o mke2fs.profiled \
- 		$(PROFILED_MKE2FS_OBJS) $(PROFILED_LIBBLKID) \
- 		$(PROFILED_LIBUUID) $(PROFILED_LIBE2P) \
- 		$(LIBINTL) $(PROFILED_LIBS) $(SYSLIBS) $(LIBMAGIC)
 diff --git a/misc/create_inode.c b/misc/create_inode.c
-index c879a3e..37d5ca6 100644
+index c879a3e..91a9cf6 100644
 --- a/misc/create_inode.c
 +++ b/misc/create_inode.c
-@@ -21,17 +21,28 @@
- #ifdef HAVE_ATTR_XATTR_H
- #include <attr/xattr.h>
- #endif
-+#include <linux/xattr.h>
- #include <sys/ioctl.h>
- #include <ext2fs/ext2fs.h>
+@@ -26,12 +26,270 @@
  #include <ext2fs/ext2_types.h>
  #include <ext2fs/fiemap.h>
  
-+#include <openssl/sha.h>
-+#include <openssl/pem.h>
-+#include <openssl/hmac.h>
-+#include <openssl/err.h>
-+#include <openssl/rsa.h>
 +
 +#include <asm/byteorder.h>
 +
@@ -106,38 +108,14 @@ index c879a3e..37d5ca6 100644
  /* 64KiB is the minimium blksize to best minimize system call overhead. */
  #define COPY_FILE_BUFLEN	65536
  
-+static errcode_t set_inode_evm_hash(ext2_filsys fs, ext2_ino_t ino, const char *filename, struct ext2_xattr_handle *handle);
++#ifdef HAVE_OPENSSL
++#include <linux/xattr.h>
++#include <openssl/sha.h>
++#include <openssl/pem.h>
++#include <openssl/hmac.h>
++#include <openssl/err.h>
++#include <openssl/rsa.h>
 +
- static int ext2_file_type(unsigned int mode)
- {
- 	if (LINUX_S_ISREG(mode))
-@@ -204,6 +215,14 @@ static errcode_t set_inode_xattr(ext2_filsys fs, ext2_ino_t ino,
- 		}
- 
- 	}
-+
-+	retval = set_inode_evm_hash(fs, ino, filename, handle);
-+	if (retval) {
-+		com_err(__func__, retval,
-+				_("while setting EVM Hash for \"%s\""), filename);
-+		goto out;
-+	}
-+
-  out:
- 	ext2fs_free_mem(&list);
- 	close_retval = ext2fs_xattrs_close(&handle);
-@@ -219,6 +238,7 @@ static errcode_t set_inode_xattr(ext2_filsys fs EXT2FS_ATTR((unused)),
- 				 ext2_ino_t ino EXT2FS_ATTR((unused)),
- 				 const char *filename EXT2FS_ATTR((unused)))
- {
-+	printf("oops\n");
- 	return 0;
- }
- #endif  /* HAVE_LLISTXATTR */
-@@ -678,6 +698,251 @@ out:
- 	return retval;
- }
- 
 +static char *evm_default_xattrs[] = {
 +	XATTR_NAME_SELINUX,
 +	XATTR_NAME_SMACK,
@@ -223,7 +201,7 @@ index c879a3e..37d5ca6 100644
 +};
 +
 +/* Add EVM Signature to Inode */
-+static errcode_t set_inode_evm_hash(ext2_filsys fs, ext2_ino_t ino, const char *filename, struct ext2_xattr_handle *handle)
++static errcode_t set_inode_evm_hash(ext2_filsys fs, ext2_ino_t ino, const char *filename, struct ext2_xattr_handle *handle, const char *key_path)
 +{
 +	int err;
 +	__u32 generation = 0;
@@ -306,9 +284,9 @@ index c879a3e..37d5ca6 100644
 +
 +	FILE *fp;
 +
-+	fp = fopen("/home/esven/openembedded/krogoth/poky/meta-intel-iot-security/meta-integrity/scripts/keys/privkey_ima.pem", "r");
++	fp = fopen(key_path, "r");
 +	if (!fp) {
-+		com_err(__func__, 0, "Failed to open keyfile: %s\n", "/home/esven/openembedded/krogoth/poky/meta-intel-iot-security/meta-integrity/scripts/keys/privkey_ima.pem");
++		com_err(__func__, 0, "Failed to open keyfile: %s\n", key_path);
 +		return -1;
 +	}
 +	ERR_load_crypto_strings();
@@ -383,9 +361,158 @@ index c879a3e..37d5ca6 100644
 +	return err;
 +}
 +
++#endif
++
+ static int ext2_file_type(unsigned int mode)
+ {
+ 	if (LINUX_S_ISREG(mode))
+@@ -125,7 +383,7 @@ static errcode_t set_inode_extra(ext2_filsys fs, ext2_ino_t ino,
+ 
+ #ifdef HAVE_LLISTXATTR
+ static errcode_t set_inode_xattr(ext2_filsys fs, ext2_ino_t ino,
+-				 const char *filename)
++				 const char *filename, const char *key_path)
+ {
+ 	errcode_t			retval, close_retval;
+ 	struct ext2_xattr_handle	*handle;
+@@ -204,6 +462,17 @@ static errcode_t set_inode_xattr(ext2_filsys fs, ext2_ino_t ino,
+ 		}
+ 
+ 	}
++#ifdef HAVE_OPENSSL
++	if (key_path) {
++		retval = set_inode_evm_hash(fs, ino, filename, handle, key_path);
++		if (retval) {
++			com_err(__func__, retval,
++					_("while setting EVM Hash for \"%s\""), filename);
++			goto out;
++		}
++	}
++#endif
++
+  out:
+ 	ext2fs_free_mem(&list);
+ 	close_retval = ext2fs_xattrs_close(&handle);
+@@ -217,8 +486,10 @@ static errcode_t set_inode_xattr(ext2_filsys fs, ext2_ino_t ino,
+ #else /* HAVE_LLISTXATTR */
+ static errcode_t set_inode_xattr(ext2_filsys fs EXT2FS_ATTR((unused)),
+ 				 ext2_ino_t ino EXT2FS_ATTR((unused)),
+-				 const char *filename EXT2FS_ATTR((unused)))
++				 const char *filename EXT2FS_ATTR((unused)),
++				 const char *key_path EXT2FS_ATTR((unused)))
+ {
++	printf("oops\n");
+ 	return 0;
+ }
+ #endif  /* HAVE_LLISTXATTR */
+@@ -681,7 +952,7 @@ out:
  /* Copy files from source_dir to fs */
  static errcode_t __populate_fs(ext2_filsys fs, ext2_ino_t parent_ino,
  			       const char *source_dir, ext2_ino_t root,
+-			       struct hdlinks_s *hdlinks)
++			       struct hdlinks_s *hdlinks, const char *key_path)
+ {
+ 	const char	*name;
+ 	DIR		*dh;
+@@ -817,7 +1088,7 @@ find_lnf:
+ 					goto out;
+ 			}
+ 			/* Populate the dir recursively*/
+-			retval = __populate_fs(fs, ino, name, root, hdlinks);
++			retval = __populate_fs(fs, ino, name, root, hdlinks, key_path);
+ 			if (retval)
+ 				goto out;
+ 			if (chdir("..")) {
+@@ -846,7 +1117,7 @@ find_lnf:
+ 			goto out;
+ 		}
+ 
+-		retval = set_inode_xattr(fs, ino, name);
++		retval = set_inode_xattr(fs, ino, name, key_path);
+ 		if (retval) {
+ 			com_err(__func__, retval,
+ 				_("while setting xattrs for \"%s\""), name);
+@@ -884,9 +1155,9 @@ out:
+ 	closedir(dh);
+ 	return retval;
+ }
+-
+ errcode_t populate_fs(ext2_filsys fs, ext2_ino_t parent_ino,
+-		      const char *source_dir, ext2_ino_t root)
++		      const char *source_dir, ext2_ino_t root, const char *key_path)
++
+ {
+ 	struct hdlinks_s hdlinks;
+ 	errcode_t retval;
+@@ -905,7 +1176,7 @@ errcode_t populate_fs(ext2_filsys fs, ext2_ino_t parent_ino,
+ 		return retval;
+ 	}
+ 
+-	retval = __populate_fs(fs, parent_ino, source_dir, root, &hdlinks);
++	retval = __populate_fs(fs, parent_ino, source_dir, root, &hdlinks, key_path);
+ 
+ 	free(hdlinks.hdl);
+ 	return retval;
+diff --git a/misc/create_inode.h b/misc/create_inode.h
+index cf49df2..a755357 100644
+--- a/misc/create_inode.h
++++ b/misc/create_inode.h
+@@ -26,7 +26,7 @@ struct hdlinks_s
+ 
+ /* For populating the filesystem */
+ extern errcode_t populate_fs(ext2_filsys fs, ext2_ino_t parent_ino,
+-			     const char *source_dir, ext2_ino_t root);
++			     const char *source_dir, ext2_ino_t root, const char *key_path);
+ extern errcode_t do_mknod_internal(ext2_filsys fs, ext2_ino_t cwd,
+ 				   const char *name, struct stat *st);
+ extern errcode_t do_symlink_internal(ext2_filsys fs, ext2_ino_t cwd,
+diff --git a/misc/mke2fs.c b/misc/mke2fs.c
+index 4f5d5c0..b2cd370 100644
+--- a/misc/mke2fs.c
++++ b/misc/mke2fs.c
+@@ -81,6 +81,7 @@ static const char * device_name /* = NULL */;
+ static int	cflag;
+ int	verbose;
+ int	quiet;
++static char *	key_path = 0;
+ static int	super_only;
+ static int	discard = 1;	/* attempt to discard device before fs creation */
+ static int	direct_io;
+@@ -1557,7 +1558,7 @@ profile_error:
+ 	}
+ 
+ 	while ((c = getopt (argc, argv,
+-		    "b:cd:e:g:i:jl:m:no:qr:s:t:vC:DE:FG:I:J:KL:M:N:O:R:ST:U:Vz:")) != EOF) {
++		    "b:cd:e:g:i:jl:k:m:no:qr:s:t:vC:DE:FG:I:J:KL:M:N:O:R:ST:U:Vz:")) != EOF) {
+ 		switch (c) {
+ 		case 'b':
+ 			blocksize = parse_num_blocks2(optarg, -1);
+@@ -1679,6 +1680,16 @@ profile_error:
+ 		case 'J':
+ 			parse_journal_opts(optarg);
+ 			break;
++#ifdef HAVE_OPENSSL
++		case 'k':
++			key_path = strdup(optarg);
++			if (!key_path) {
++				com_err(program_name, ENOMEM, "%s",
++						_("in malloc for key_path"));
++				exit(1);
++			}
++			break;
++#endif
+ 		case 'K':
+ 			fprintf(stderr, "%s",
+ 				_("Warning: -K option is deprecated and "
+@@ -3176,7 +3187,7 @@ no_journal:
+ 			printf("%s", _("Copying files into the device: "));
+ 
+ 		retval = populate_fs(fs, EXT2_ROOT_INO, src_root_dir,
+-				     EXT2_ROOT_INO);
++				     EXT2_ROOT_INO, key_path);
+ 		if (retval) {
+ 			com_err(program_name, retval, "%s",
+ 				_("while populating file system"));
 -- 
 2.7.4
 
