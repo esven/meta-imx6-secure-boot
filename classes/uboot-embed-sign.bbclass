@@ -33,12 +33,11 @@ python () {
 		flags = d.getVarFlag('do_assemble_fitimage', 'depends', True)
 		# do_assemble_fitimage now depends on CONTROL_DT_RECIPE:do_deploy instead
 		# of u-boot:do_deploy as this would create a circular dependency.
-		flags = flags.replace( ' %s:do_deploy' % uboot_pn, '%s:do_deploy' % controlDt)
+		flags = flags.replace( '%s:do_deploy' % uboot_pn, '%s:do_deploy' % controlDt)
 		d.setVarFlag('do_assemble_fitimage', 'depends', flags)
 		image = d.getVar('INITRAMFS_IMAGE', True)
 		if image:
 			flags = d.getVarFlag('do_assemble_fitimage_initramfs', 'depends', True)
-			flags = flags.replace( ' %s:do_deploy' % uboot_pn, '%s:do_deploy' % controlDt)
+			flags = flags.replace( '%s:do_deploy' % uboot_pn, ' %s:do_deploy' % controlDt)
 			d.setVarFlag('do_assemble_fitimage_initramfs', 'depends', flags)
-			d.appendVarFlag('do_assemble_fitimage_initramfs', 'depends', '%s:do_deploy' % controlDt)
 }
