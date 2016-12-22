@@ -1,7 +1,7 @@
 
 python __anonymous () {
 	if d.getVar('UBOOT_SIGN_ENABLE', True):
-		d.appendVar("DEPENDS", " cst-native")
+		d.appendVar("DEPENDS", " hab-cst-native")
 		bb.build.addtask('do_sign_uboot_binaries', 'do_deploy do_install', 'do_compile', d)
 }
 
