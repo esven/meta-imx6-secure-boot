@@ -8,6 +8,8 @@
 # virtual/kernel:do_assemble_fitimage
 # u-boot:do_compile
 
+inherit uboot-sign
+
 CONTROL_DT_RECIPE ?= "simple-control-dt"
 
 python () {
