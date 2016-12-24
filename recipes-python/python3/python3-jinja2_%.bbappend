@@ -1,0 +1,11 @@
+BBCLASSEXTEND = "native"
+
+RDEPENDS_${PN}_remove_class-native = "${PYTHON_PN}-io"
+RDEPENDS_${PN}_remove_class-native = "${PYTHON_PN}-pickle"
+RDEPENDS_${PN}_remove_class-native = "${PYTHON_PN}-crypt"
+RDEPENDS_${PN}_remove_class-native = "${PYTHON_PN}-math"
+RDEPENDS_${PN}_remove_class-native = "${PYTHON_PN}-netclient"
+RDEPENDS_${PN}_remove_class-native = "${PYTHON_PN}-re"
+RDEPENDS_${PN}_remove_class-native = "${PYTHON_PN}-lang"
+RDEPENDS_${PN}_remove_class-native = "${PYTHON_PN}-pprint"
+RDEPENDS_${PN}_remove_class-native = "${PYTHON_PN}-shell"
